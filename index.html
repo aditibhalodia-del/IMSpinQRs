@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CAT '26 – QR Codes</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root { --blue:#1a237e; --light:#e8eaf6; --green:#15803d; --amber:#d97706; --border:#d1d5db; --text:#111827; --muted:#6b7280; }
@@ -29,7 +30,7 @@ hr.divider { border: none; border-top: 1px solid #e5e7eb; margin-bottom: 20px; }
 .s-meta strong { color: var(--blue); }
 .s-pin { font-family: monospace; font-size: 12px; color: var(--muted); margin-top: 5px; }
 .qr-center { display: flex; flex-direction: column; align-items: center; padding: 4px 0 12px; }
-#qr-img { width: 240px; height: 240px; border: 1.5px solid #e5e7eb; border-radius: 14px; padding: 12px; background: #fff; display: none; }
+#qr-canvas { display: none; border: 1.5px solid #e5e7eb; border-radius: 14px; padding: 12px; background: #fff; }
 .qr-hint { font-size: 12px; color: var(--muted); margin-top: 10px; text-align: center; }
 .btn-download { width: 100%; margin-top: 14px; padding: 13px; background: var(--green); color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; text-align: center; text-decoration: none; display: block; transition: background 0.2s; }
 .btn-download:hover { background: #166534; }
@@ -75,10 +76,10 @@ footer { margin-top: 28px; text-align: center; font-size: 11.5px; color: #9ca3af
         <div class="s-pin" id="sPin"></div>
       </div>
       <div class="qr-center">
-        <img id="qr-img" alt="Your QR Code">
+        <canvas id="qr-canvas"></canvas>
         <div class="qr-hint">📲 Show this QR at the gate before entering</div>
       </div>
-      <a id="btn-download" class="btn-download" download="IMS_QR.png">⬇ Download QR Code</a>
+      <button class="btn-download" onclick="downloadQR()">⬇ Download QR Code</button>
     </div>
 
     <div class="notice">
@@ -1786,12 +1787,17 @@ const DB = {
   ],
 };
 
-var batchSel = document.getElementById("batchSelect");
-var nameSel  = document.getElementById("nameSelect");
-var qrImg    = document.getElementById("qr-img");
-var dlBtn    = document.getElementById("btn-download");
+var batchSel    = document.getElementById("batchSelect");
+var nameSel     = document.getElementById("nameSelect");
+var qrCanvas    = document.getElementById("qr-canvas");
+var currentPin  = null;
+var currentName = null;
+var currentBatch= null;
 
-Object.keys(DB).sort(function(a,b){ return parseInt(a.replace('CAT ','')) - parseInt(b.replace('CAT ','')); }).forEach(function(b) {
+// Populate batch dropdown
+Object.keys(DB).sort(function(a,b){
+  return parseInt(a.replace('CAT ','')) - parseInt(b.replace('CAT ',''));
+}).forEach(function(b) {
   var opt = document.createElement("option");
   opt.value = b; opt.textContent = b;
   batchSel.appendChild(opt);
@@ -1812,7 +1818,7 @@ function onBatchChange() {
 
 function onNameChange() {
   document.getElementById("result").style.display = "none";
-  qrImg.style.display = "none";
+  qrCanvas.style.display = "none";
 }
 
 function generateQR() {
@@ -1828,19 +1834,103 @@ function generateQR() {
   }
   if (!student) { alert("Student not found. Please try again."); return; }
 
+  currentPin   = pin;
+  currentName  = student.name;
+  currentBatch = batch;
+
   document.getElementById("sName").textContent  = student.name;
   document.getElementById("sBatch").textContent = batch;
   document.getElementById("sPin").textContent   = "PIN: " + pin;
 
-  var qrSrc = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&bgcolor=ffffff&color=000000&data=" + encodeURIComponent(pin);
+  // Encode JSON — matches what the scanner expects
+  var qrData = JSON.stringify({ pin: pin, name: student.name, batch: batch });
 
-  qrImg.src = qrSrc;
-  qrImg.style.display = "block";
-  dlBtn.href = qrSrc;
-  dlBtn.setAttribute("download", "IMS_QR_" + pin + ".png");
+  // Generate QR using qrcode-generator library
+  var qr = qrcode(0, 'M');
+  qr.addData(qrData);
+  qr.make();
 
+  // Draw onto canvas
+  var modules  = qr.getModuleCount();
+  var cellSize = 8; // 8px per module → ~256px for typical QR
+  var margin   = 3; // quiet zone in cells
+  var size     = (modules + margin * 2) * cellSize;
+
+  qrCanvas.width  = size;
+  qrCanvas.height = size;
+  var ctx = qrCanvas.getContext("2d");
+
+  // White background
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, size, size);
+
+  // Black modules
+  ctx.fillStyle = "#000000";
+  for (var row = 0; row < modules; row++) {
+    for (var col = 0; col < modules; col++) {
+      if (qr.isDark(row, col)) {
+        ctx.fillRect(
+          (col + margin) * cellSize,
+          (row + margin) * cellSize,
+          cellSize, cellSize
+        );
+      }
+    }
+  }
+
+  qrCanvas.style.display = "block";
   document.getElementById("result").style.display = "block";
   document.getElementById("result").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function downloadQR() {
+  if (!qrCanvas || !currentPin) return;
+
+  // Create a larger canvas with student info below the QR
+  var pad   = 24;
+  var infoH = 70;
+  var out   = document.createElement("canvas");
+  out.width  = qrCanvas.width  + pad * 2;
+  out.height = qrCanvas.height + pad * 2 + infoH;
+  var ctx = out.getContext("2d");
+
+  // Background
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, out.width, out.height);
+
+  // Top bar
+  ctx.fillStyle = "#1a237e";
+  ctx.fillRect(0, 0, out.width, 7);
+
+  // QR
+  ctx.drawImage(qrCanvas, pad, 14);
+
+  // Student info
+  var cx = out.width / 2;
+  var ty = qrCanvas.height + 14 + pad;
+
+  ctx.fillStyle = "#1a237e";
+  ctx.font = "bold 18px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(currentName, cx, ty + 20);
+
+  ctx.fillStyle = "#374151";
+  ctx.font = "14px Arial";
+  ctx.fillText(currentBatch, cx, ty + 42);
+
+  ctx.fillStyle = "#9ca3af";
+  ctx.font = "12px Arial";
+  ctx.fillText("IMS Ahmedabad  ·  CAT 26", cx, ty + 62);
+
+  // Bottom bar
+  ctx.fillStyle = "#1a237e";
+  ctx.fillRect(0, out.height - 7, out.width, 7);
+
+  // Download
+  var link = document.createElement("a");
+  link.download = "IMS_QR_" + currentPin + ".png";
+  link.href = out.toDataURL("image/png");
+  link.click();
 }
 </script>
 
